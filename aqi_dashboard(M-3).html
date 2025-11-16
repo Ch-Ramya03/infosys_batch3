@@ -1,0 +1,483 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Air Quality Alert Dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <style>
+    body { font-family: Inter, Roboto, "Segoe UI", Arial; background:#fff8f3; margin:0; }
+    header{background:linear-gradient(90deg,#ffd9b3,#ffeedd);padding:20px;border-bottom:1px solid rgba(0,0,0,0.04)}
+    .title{color:#d9534f;font-size:26px;margin:0}
+    .subtitle{color:#b3503a;margin-top:6px;font-size:13px}
+    .wrap{max-width:1200px;margin:20px auto;padding:12px;}
+    .controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+    .controls > *{background:white;padding:10px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.04)}
+    select,input[type="date"],button{padding:8px 10px;border-radius:6px;border:1px solid #ddd;font-size:14px}
+    .grid{display:grid;grid-template-columns: 1fr 1fr; gap:14px;}
+    .card{background:white;border-radius:12px;padding:16px;box-shadow:0 6px 18px rgba(17,17,17,0.06);min-height:140px}
+    .small-card{display:flex;gap:12px;align-items:center}
+    .aqi-big{width:140px;height:140px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:34px;margin:auto}
+    .badge{padding:6px 10px;border-radius:999px;font-weight:700}
+    .forecast-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+    .forecast-item{min-width:88px;padding:12px;border-radius:10px;background:#f5f5f5;text-align:center}
+    .alerts{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+    .alert-item{padding:10px;border-radius:8px}
+    footer{font-size:13px;color:#666;margin-top:14px;text-align:center}
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="title">Air Quality Alert System</div>
+    <div class="subtitle">Multi-Station Dashboard — select city, date range & AQI field</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="controls">
+    <div>
+      <label><strong>Upload CSV</strong></label><br/>
+      <input id="fileInput" type="file" accept=".csv" />
+      <div style="font-size:12px;color:#666;margin-top:6px">Select your `city_day.csv` (from zip)</div>
+    </div>
+
+    <div>
+      <label><strong>City</strong></label><br/>
+      <select id="citySelect"><option>— upload CSV —</option></select>
+    </div>
+
+    <div>
+      <label><strong>Date range</strong></label><br/>
+      <input id="startDate" type="date"> to <input id="endDate" type="date">
+    </div>
+
+    <div>
+      <label><strong>AQI Field</strong></label><br/>
+      <select id="aqiSelect">
+        <option value="AQI">AQI</option>
+        <option value="PM2.5">PM2.5</option>
+        <option value="PM10">PM10</option>
+        <option value="O3">O3</option>
+        <option value="NO2">NO2</option>
+        <option value="SO2">SO2</option>
+        <option value="CO">CO</option>
+      </select>
+    </div>
+
+    <div style="align-self:end">
+      <button id="updateBtn">Update Dashboard</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- Current + Forecast -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><strong>Current Air Quality</strong><div id="stationName" style="color:#666;font-size:13px"></div></div>
+        <div style="font-size:12px;color:#666">Latest available</div>
+      </div>
+
+      <div style="display:flex;gap:16px;margin-top:12px;align-items:center">
+        <div style="flex:0 0 200px">
+          <div id="aqiCircle" class="aqi-big">--</div>
+          <div id="aqiCategory" style="text-align:center;margin-top:8px;font-weight:700">--</div>
+        </div>
+
+        <div style="flex:1">
+          <div><strong>7-Day Forecast</strong></div>
+          <div id="forecastCards" class="forecast-row"></div>
+          <div style="font-size:12px;color:#777;margin-top:6px">Legend: Good / Moderate / Unhealthy for Sensitive / Unhealthy</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alerts & Polutant chart -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><strong>Pollutant Concentrations</strong><div style="font-size:12px;color:#666">daily trend for selected range</div></div>
+        <div style="font-size:12px;color:#666">WHO guideline lines shown</div>
+      </div>
+
+      <div id="pollutantChart" style="height:300px;margin-top:12px"></div>
+    </div>
+
+    <!-- Active Alerts -->
+    <div class="card">
+      <div><strong>Active Alerts</strong></div>
+      <div id="alertsContainer" class="alerts"></div>
+    </div>
+
+    <!-- Optional details -->
+    <div class="card">
+      <div><strong>Data Summary</strong></div>
+      <div style="margin-top:10px;font-size:13px;color:#444">
+        <div>Records: <span id="recCount">0</span></div>
+        <div>Available pollutants: <span id="availablePolls">-</span></div>
+        <div style="margin-top:12px"><em>Tip:</em> If your CSV is inside a zip, first extract `city_day.csv` and upload it here.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>Built for your dataset — upload CSV, choose a city & field, then click <strong>Update Dashboard</strong>.</footer>
+</div>
+
+<script>
+  // ---------- utility functions ----------
+  function parseDate(d) { return d ? new Date(d) : null; }
+  function fmtDate(d) {
+    if(!d) return '';
+    const dt = new Date(d);
+    return dt.toISOString().slice(0,10);
+  }
+
+  // AQI category mapping
+  function aqiCategory(aqi) {
+    if (aqi === null || isNaN(aqi)) return {label:'Unknown', color:'#999'};
+    aqi = +aqi;
+    if (aqi <= 50) return {label:'Good', color:'#4CAF50'};
+    if (aqi <= 100) return {label:'Moderate', color:'#FFC107'};
+    if (aqi <= 150) return {label:'Unhealthy for Sensitive', color:'#FF9800'};
+    if (aqi <= 200) return {label:'Unhealthy', color:'#F44336'};
+    if (aqi <= 300) return {label:'Very Unhealthy', color:'#9C27B0'};
+    return {label:'Hazardous', color:'#7B1FA2'};
+  }
+
+  // PM2.5 & PM10 breakpoints (EPA) for converting concentration -> AQI (approx)
+  const pm25_breaks = [
+    [0.0, 12.0, 0, 50],
+    [12.1, 35.4, 51, 100],
+    [35.5, 55.4, 101, 150],
+    [55.5, 150.4, 151, 200],
+    [150.5, 250.4, 201, 300],
+    [250.5, 350.4, 301, 400],
+    [350.5, 500.4, 401, 500]
+  ];
+  const pm10_breaks = [
+    [0,54,0,50],
+    [55,154,51,100],
+    [155,254,101,150],
+    [255,354,151,200],
+    [355,424,201,300],
+    [425,504,301,400],
+    [505,604,401,500]
+  ];
+  function interpAQI(Cp, breaks){
+    if (Cp===null || Cp===undefined || Cp==='') return NaN;
+    Cp = +Cp;
+    for (let b of breaks){
+      const [Cl, Ch, Il, Ih] = b;
+      if (Cp >= Cl && Cp <= Ch){
+        return Math.round((Ih-Il)/(Ch-Cl)*(Cp-Cl)+Il);
+      }
+    }
+    return NaN;
+  }
+
+  // ---------- CSV handling + Data model ----------
+  let rawRows = [];  // array of objects
+  let stations = []; // distinct station list
+  let colNames = []; // columns from CSV
+
+  function detectColumns(row) {
+    // normalize keys
+    const keys = Object.keys(row);
+    const norm = keys.map(k=>k.toLowerCase().replace(/\s+/g,'').replace(/[_\-\.]/g,''));
+    const mapping = {};
+    keys.forEach((k,i)=>mapping[norm[i]] = k);
+    return mapping;
+  }
+
+  document.getElementById('fileInput').addEventListener('change', function(e){
+    const f = e.target.files[0];
+    if (!f) return;
+    Papa.parse(f, {
+      header: true,
+      dynamicTyping: false,
+      skipEmptyLines: true,
+      complete: function(results) {
+        rawRows = results.data;
+        if (rawRows.length === 0) {
+          alert('CSV contained no rows.');
+          return;
+        }
+        colNames = Object.keys(rawRows[0]);
+        buildStationList();
+        document.getElementById('recCount').innerText = rawRows.length;
+        document.getElementById('availablePolls').innerText = colNames.join(', ');
+        // set default date fields
+        const dates = rawRows.map(r => r.Date || r.date || r.Day || r.day).filter(Boolean).map(d=>new Date(d)).sort((a,b)=>a-b);
+        if (dates.length){
+          const s = dates[0], e = dates[dates.length-1];
+          document.getElementById('startDate').value = s.toISOString().slice(0,10);
+          document.getElementById('endDate').value = e.toISOString().slice(0,10);
+        }
+      },
+      error: function(err){ alert('Failed to parse CSV: ' + err.message); }
+    });
+  });
+
+  function buildStationList(){
+    // find station column (city/station/location)
+    const sample = rawRows[0];
+    const mapping = detectColumns(sample);
+    let stationKey = null;
+    for (let key of Object.keys(mapping)){
+      if (key.includes('city') || key.includes('station') || key.includes('location') || key.includes('site')) {
+        stationKey = mapping[key];
+        break;
+      }
+    }
+    // find date column
+    let dateKey = null;
+    for (let key of Object.keys(mapping)){
+      if (key.includes('date') || key.includes('day') || key.includes('time')) {
+        dateKey = mapping[key];
+        break;
+      }
+    }
+    // normalize dataset rows with chosen keys
+    rawRows = rawRows.map(r=>{
+      const out = Object.assign({}, r);
+      if (stationKey) out._station = r[stationKey];
+      else out._station = 'Station';
+      if (dateKey) out._date = r[dateKey];
+      else out._date = r.Date || r.date || r.Day || r.day;
+      return out;
+    });
+    // build stations
+    const set = new Set(rawRows.map(r=> (r._station || 'Station') ));
+    stations = Array.from(set).sort();
+    const sel = document.getElementById('citySelect');
+    sel.innerHTML = '';
+    stations.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s; o.innerText = s;
+      sel.appendChild(o);
+    });
+  }
+
+  // ---------- Dashboard logic ----------
+  document.getElementById('updateBtn').addEventListener('click', updateDashboard);
+
+  function updateDashboard(){
+    const city = document.getElementById('citySelect').value;
+    if (!city) { alert('Select a city/station first.'); return; }
+
+    // date range
+    const sd = document.getElementById('startDate').value;
+    const ed = document.getElementById('endDate').value;
+    const start = sd ? new Date(sd) : null;
+    const end = ed ? new Date(ed) : null;
+
+    const field = document.getElementById('aqiSelect').value;  // e.g., 'AQI' or 'PM2.5'
+
+    // filter rows for city and range
+    const cityRows = rawRows
+      .filter(r => (r._station || 'Station') == city)
+      .map(r => {
+        const rec = Object.assign({}, r);
+        rec._dateObj = r._date ? new Date(r._date) : null;
+        return rec;
+      })
+      .filter(r => r._dateObj)  // require date
+      .filter(r => ( (!start || r._dateObj >= start) && (!end || r._dateObj <= end) ))
+      .sort((a,b) => a._dateObj - b._dateObj);
+
+    if (cityRows.length === 0) {
+      alert('No rows for that city/date range.');
+      return;
+    }
+
+    // Determine available pollutant columns
+    const header = Object.keys(cityRows[0]);
+    const pollCols = ['PM2.5','PM10','O3','NO2','SO2','CO'];
+    const found = pollCols.filter(p=> header.includes(p) || header.includes(p.replace('.','')) );
+
+    // Construct time series arrays (date -> value)
+    const dates = cityRows.map(r => r._dateObj);
+    const rawAQIvals = cityRows.map(r => {
+      // If user selected 'AQI' and dataset has AQI column, use it. Else compute for pollutant.
+      if (field === 'AQI') {
+        const q = r['AQI'] ?? r['aqi'] ?? r['AQI_Index'] ?? r['Index'];
+        return q !== undefined ? +q : NaN;
+      } else {
+        // pollutant selected: try to find column name match
+        let val = r[field];
+        if (val === undefined) {
+          // try lowercase/no-dot match
+          for (let k of Object.keys(r)){
+            if (k.toLowerCase().replace(/[\.\s_]/g,'') === field.toLowerCase().replace(/[\.\s_]/g,'')){
+              val = r[k]; break;
+            }
+          }
+        }
+        return val !== undefined ? +val : NaN;
+      }
+    });
+
+    // If field is pollutant (PM2.5 or PM10), compute pollutant->AQI using breakpoints
+    let computedAQI = [];
+    if (field === 'PM2.5') {
+      computedAQI = rawAQIvals.map(v => interpAQI(v, pm25_breaks));
+    } else if (field === 'PM10') {
+      computedAQI = rawAQIvals.map(v => interpAQI(v, pm10_breaks));
+    } else if (field === 'AQI') {
+      computedAQI = rawAQIvals;
+    } else {
+      // other gases: create a simple scaled AQI between 0-500 (placeholder)
+      // scale using min..99th percentile
+      const valid = rawAQIvals.filter(v => !isNaN(v));
+      let p1 = Math.min(...valid), p99 = quantile(valid, 0.99);
+      if (!isFinite(p1)) p1 = 0;
+      if (!isFinite(p99) || p99===p1) p99 = p1 + 1;
+      computedAQI = rawAQIvals.map(v => isNaN(v) ? NaN : Math.round( ( (v - p1) / (p99 - p1) ) * 500 ));
+    }
+
+    // Use last available point as "current"
+    let lastIdx = computedAQI.length - 1;
+    while (lastIdx >=0 && (!isFinite(computedAQI[lastIdx]) || computedAQI[lastIdx]===null)) lastIdx--;
+    if (lastIdx < 0) {
+      alert('No valid AQI values in selected range for that city/field.');
+      return;
+    }
+    const currentAQI = computedAQI[lastIdx];
+    const currentDate = dates[lastIdx];
+
+    // Update Current section
+    document.getElementById('stationName').innerText = city + ' — ' + fmtDate(currentDate);
+    document.getElementById('aqiCircle').innerText = (isFinite(currentAQI) ? currentAQI : '--');
+    const cat = aqiCategory(currentAQI);
+    document.getElementById('aqiCircle').style.background = cat.color;
+    document.getElementById('aqiCircle').style.color = '#fff';
+    document.getElementById('aqiCategory').innerText = cat.label;
+    document.getElementById('aqiCategory').style.color = cat.color;
+
+    // Compute 7-day forecast: simple linear fit on last up to 30 days
+    const seriesX = computedAQI.map((v,i)=> ({i:i, v:v}) ).filter(o=>isFinite(o.v));
+    const lastN = Math.min(30, seriesX.length);
+    const recent = seriesX.slice(-lastN);
+    let forecast = [];
+    if (recent.length >= 2) {
+      // linear regression slope & intercept
+      const xs = recent.map((r, idx) => idx);
+      const ys = recent.map(r => r.v);
+      const {m,b} = linreg(xs, ys);
+      for (let k=1;k<=7;k++){
+        const xpred = xs.length - 1 + k;
+        forecast.push(Math.round(m*xpred + b));
+      }
+    } else {
+      // fallback: repeat last value
+      const lastVal = seriesX.length ? seriesX[seriesX.length-1].v : NaN;
+      for (let k=0;k<7;k++) forecast.push(Math.round(lastVal));
+    }
+
+    // Create forecast cards
+    const cardRoot = document.getElementById('forecastCards');
+    cardRoot.innerHTML = '';
+    const dayLabels = nextNDaysLabels(7, currentDate);
+    for (let i=0;i<7;i++){
+      const v = forecast[i];
+      const info = aqiCategory(v);
+      const el = document.createElement('div');
+      el.className = 'forecast-item';
+      el.style.background = info.color.replace('#','') ? lighten(info.color, 0.9) : '#f5f5f5';
+      el.innerHTML = `<div style="font-size:12px;color:#666">${dayLabels[i]}</div>
+                      <div style="font-weight:800;font-size:18px">${v}</div>
+                      <div style="font-size:12px;color:#333">${info.label}</div>`;
+      cardRoot.appendChild(el);
+    }
+
+    // Pollutant concentrations chart: show PM2.5, PM10, O3 if available
+    const traces = [];
+    ['PM2.5','PM10','O3','NO2','SO2','CO'].forEach(pol => {
+      // find matching column in rows
+      const colName = Object.keys(cityRows[0]).find(k => k.toLowerCase().replace(/[\._\s-]/g,'') === pol.toLowerCase().replace(/[\._\s-]/g,''));
+      if (colName) {
+        const y = cityRows.map(r => +r[colName]);
+        traces.push({
+          x: dates.map(d=>fmtDate(d)),
+          y: y,
+          mode: 'lines+markers',
+          name: pol
+        });
+      }
+    });
+    // WHO guideline lines (for PM2.5 and PM10)
+    const shapes = [];
+    // plot
+    const layout = {
+      margin:{t:30,l:50,r:20,b:50},
+      legend:{orientation:'h'},
+      yaxis:{title:'Concentration'},
+      xaxis:{title:'Date'}
+    };
+    Plotly.newPlot('pollutantChart', traces, layout, {responsive:true});
+
+    // Active alerts: generate messages based on current AQI and forecast
+    const alerts = [];
+    if (currentAQI >= 151) alerts.push({level:'High', text:'Unhealthy — avoid prolonged outdoor exposure.'});
+    else if (currentAQI >= 101) alerts.push({level:'Moderate', text:'Unhealthy for sensitive groups.'});
+    else alerts.push({level:'Normal', text:'Air quality within acceptable range.'});
+    // forecast warnings if any forecast value >=151
+    if (forecast.some(v => isFinite(v) && v >= 151)) {
+      alerts.push({level:'Forecast High', text:'High AQI expected in coming days — plan accordingly.'});
+    }
+
+    const alertsRoot = document.getElementById('alertsContainer');
+    alertsRoot.innerHTML = '';
+    alerts.forEach(a=>{
+      const div = document.createElement('div');
+      div.className = 'alert-item';
+      if (a.level.includes('High')) div.style.background = '#fdecea';
+      else if (a.level.includes('Moderate')) div.style.background = '#fff8e1';
+      else div.style.background = '#e8f5e9';
+      div.innerHTML = `<strong>${a.level}</strong> — <span style="color:#333">${a.text}</span>`;
+      alertsRoot.appendChild(div);
+    });
+  }
+
+  // ---------- helpers ----------
+  function linreg(x,y){
+    // simple linear regression; x is array 0..n-1 typically
+    const n = x.length;
+    if (n === 0) return {m:0,b:NaN};
+    const sumx = x.reduce((a,b)=>a+b,0), sumy = y.reduce((a,b)=>a+b,0);
+    const xm = sumx/n, ym = sumy/n;
+    let num=0, den=0;
+    for (let i=0;i<n;i++){ num += (x[i]-xm)*(y[i]-ym); den += (x[i]-xm)*(x[i]-xm); }
+    const m = den===0 ? 0 : num/den;
+    const b = ym - m*xm;
+    return {m,b};
+  }
+  function quantile(arr, q){
+    if (!arr.length) return NaN;
+    const a = arr.slice().sort((x,y)=>x-y);
+    const pos = (a.length-1) * q;
+    const base = Math.floor(pos);
+    const rest = pos-base;
+    if (a[base+1] !== undefined) return a[base] + rest*(a[base+1]-a[base]);
+    return a[base];
+  }
+  function nextNDaysLabels(n, fromDate){
+    const labels = [];
+    const base = fromDate ? new Date(fromDate) : new Date();
+    for (let i=1;i<=n;i++){
+      const d = new Date(base); d.setDate(base.getDate()+i);
+      labels.push(d.toLocaleDateString(undefined, {weekday:'short'}));
+    }
+    return labels;
+  }
+  function lighten(hex, amount){
+    // hex like #rrggbb, amount 0..1 (1 = white)
+    if (!hex) return '#f5f5f5';
+    hex = hex.replace('#','');
+    const r = Math.round(parseInt(hex.substring(0,2),16) + (255-parseInt(hex.substring(0,2),16))*amount);
+    const g = Math.round(parseInt(hex.substring(2,4),16) + (255-parseInt(hex.substring(2,4),16))*amount);
+    const b = Math.round(parseInt(hex.substring(4,6),16) + (255-parseInt(hex.substring(4,6),16))*amount);
+    return `rgb(${r},${g},${b})`;
+  }
+</script>
+</body>
+</html>
